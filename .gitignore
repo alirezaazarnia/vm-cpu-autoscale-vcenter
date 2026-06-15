@@ -1,0 +1,5 @@
+# Encrypted credential files — generated locally, must not be committed
+UserPassword.txt
+
+# Backup folder — local working copies, not part of the published project
+scripts/BackUp/
