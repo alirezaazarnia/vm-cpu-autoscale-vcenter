@@ -53,9 +53,41 @@ No VM is ever scaled unless it is explicitly added to the allow-list in SQL Serv
 | Windows Server | Server running the scheduled tasks |
 | PowerShell 5.1+ | Built into Windows Server |
 | [VMware PowerCLI](https://developer.broadcom.com/powercli) | `Install-Module VMware.PowerCLI` |
-| SQL Server | Any edition (Express works for small environments) |
-| vCenter Service Account | Needs read access to VMs and alarms |
-| SQL Service Account | Created by the setup script |
+| SQL Server | Any edition; Express works for small environments |
+| vCenter Service Account | See permissions required below |
+| SQL Service Account | Created automatically by `00-create-database-and-login.sql` |
+
+### vCenter Service Account Permissions
+
+The service account used to connect to vCenter needs the following privileges:
+
+| Privilege | Why |
+|---|---|
+| `Virtual machine > Config > Change CPU count` | To reconfigure vCPU |
+| `Virtual machine > Interaction > Power on` | To power on after scale |
+| `Virtual machine > Interaction > Power off` | To shut down before scale (if Hot Add is off) |
+| `Alarms > Acknowledge alarm` | To read triggered alarm state |
+| `Global > Cancel task` | General task management |
+
+Assign these at the **vCenter** or **Cluster** level so they apply to all managed VMs.
+
+---
+
+## vCenter Alarm Setup
+
+The poller watches for an active alarm named **`Virtual machine CPU usage`** — this is a built-in vCenter alarm that already exists in most environments.
+
+To verify or enable it in vCenter:
+
+1. Open **vCenter → Configure → Alarm Definitions**.
+2. Search for `Virtual machine CPU usage`.
+3. Make sure it is **enabled** and configured to trigger at your desired CPU threshold (e.g. 90% for 5 minutes).
+
+To use a different alarm name, update the `CpuAlarmName` setting after installation:
+
+```powershell
+.\scripts\Set-AutoScaleSetting.ps1 -Name CpuAlarmName -Value "Your Custom Alarm Name"
+```
 
 ---
 
@@ -71,7 +103,7 @@ C:\AutoScale\
 
 ### Step 2 — Create the database
 
-Open **SSMS** or **sqlcmd**, open `sql\00-create-database-and-login.sql`, replace `YOUR_DB_PASSWORD_HERE` with a strong password, and run it.
+Open **SSMS** or **sqlcmd**, open `sql\00-create-database-and-login.sql`, replace `YOUR_DB_PASSWORD_HERE` with a strong password, and run it against the `master` database.
 
 This creates:
 - Database: `VMCPUAutoScale`
@@ -95,7 +127,7 @@ Edit `config\autoscale.config.psd1` and fill in your values:
         Server   = 'YOUR_SQL_SERVER_NAME'      # SQL Server hostname or IP
         Name     = 'VMCPUAutoScale'
         Username = 'svc_vm_cpu_autoscale'
-        Password = 'YOUR_DB_PASSWORD_HERE'     # same password from Step 2
+        Password = 'YOUR_DB_PASSWORD_HERE'     # same password used in Step 2
     }
 
     vCenter = @{
@@ -132,7 +164,7 @@ Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false
 # Custom MaxCPU
 .\scripts\Add-AutoScaleAllowedVM.ps1 -vCenterName "vcenter-prod-01" -VMName "DBServer01" -MaxCPU 8
 
-# Disable scale-down power-off (VM must support CPU Hot Add)
+# Disable power-off during scale-down (VM must have CPU Hot Add enabled)
 .\scripts\Add-AutoScaleAllowedVM.ps1 -vCenterName "vcenter-prod-01" -VMName "CriticalApp01" -AllowScaleDownPowerOff $false
 ```
 
@@ -152,7 +184,7 @@ Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false
     -TaskPassword "service-account-password"
 ```
 
-This creates two tasks under `\VM CPU AutoScale\`:
+This creates two tasks under `\VM CPU AutoScale\` in Windows Task Scheduler:
 
 | Task | Schedule |
 |---|---|
@@ -244,7 +276,7 @@ EnabledVCenters : 2
 
 ## Configurable Settings
 
-All settings are stored in the `dbo.Settings` table and can be changed with `Set-AutoScaleSetting.ps1`.
+All settings are stored in the `dbo.Settings` table and can be changed at any time with `Set-AutoScaleSetting.ps1` — no restart required.
 
 | Setting | Default | Description |
 |---|---|---|
@@ -278,11 +310,11 @@ All settings are stored in the `dbo.Settings` table and can be changed with `Set
 
 ```
 ├── config/
-│   └── autoscale.config.psd1       # DB and vCenter credentials (not committed)
+│   └── autoscale.config.psd1              # DB and vCenter credentials (gitignored — fill in locally)
 ├── scripts/
-│   ├── AutoScale.Common.psm1       # Shared functions (SQL, logging, email)
-│   ├── CpuScaleUp-Poller.ps1       # Scale-up logic — run every 10 min
-│   ├── CpuScaleDown-Worker.ps1     # Scale-down logic — run weekly
+│   ├── AutoScale.Common.psm1              # Shared functions: SQL, logging, email
+│   ├── CpuScaleUp-Poller.ps1              # Scale-up — runs every 10 minutes
+│   ├── CpuScaleDown-Worker.ps1            # Scale-down — runs every Sunday
 │   ├── Register-AutoScaleScheduledTasks.ps1
 │   ├── Add-AutoScaleVCenter.ps1
 │   ├── Add-AutoScaleAllowedVM.ps1
@@ -290,10 +322,10 @@ All settings are stored in the `dbo.Settings` table and can be changed with `Set
 │   ├── Test-AutoScaleDatabase.ps1
 │   └── Get-AutoScaleLastLogs.ps1
 ├── sql/
-│   ├── 00-create-database-and-login.sql
-│   ├── 01-create-schema.sql
-│   └── 02-seed-settings.sql
-└── EncryptPassword.ps1             # Utility: encrypt a password using DPAPI
+│   ├── 00-create-database-and-login.sql   # Run first — creates DB and SQL login
+│   ├── 01-create-schema.sql               # Run second — creates all tables
+│   └── 02-seed-settings.sql               # Run third — inserts default settings
+└── EncryptPassword.ps1                    # Utility: encrypt a password with DPAPI
 ```
 
 ---
@@ -301,3 +333,9 @@ All settings are stored in the `dbo.Settings` table and can be changed with `Set
 ## License
 
 MIT
+
+---
+
+## Author
+
+Built by **Alireza Azarnia** — [github.com/alirezaazarnia](https://github.com/alirezaazarnia)
